@@ -36,16 +36,13 @@
 
     <div id="settings" class="card pad span12 hide" style="margin-bottom:12px">
       <div class="grid">
-        <div class="field span3"><label>Data Mode</label><select id="dataMode"><option value="backend">Backend Render</option><option value="direct">CoinGecko Direct</option></select></div>
-        <div class="field span5"><label>Backend URL Render</label><input id="backendUrl" placeholder="https://xmode-scanner-backend.onrender.com" /></div>
-        <div class="field span4"><label>CoinGecko Demo API Key optional</label><input id="apiKey" placeholder="Only for CoinGecko Direct mode" /></div>
+        <div class="field span4"><label>CoinGecko Demo API Key optional</label><input id="apiKey" placeholder="Leave empty for public endpoint" /></div>
         <div class="field span3"><label>Coins to load</label><select id="pages"><option value="1">Top 250</option><option value="2">Top 500</option><option value="4">Top 1000</option></select></div>
         <div class="field span3"><label>Load coins by</label><select id="loadOrder"><option value="market_cap_desc">Market Cap</option><option value="volume_desc">24h Volume</option></select></div>
         <div class="field span3"><label>Historical scan max coins</label><select id="histMax"><option value="25">25 fastest</option><option value="50" selected>50 balanced</option><option value="100">100 heavier</option></select></div>
         <div class="field span2"><label>&nbsp;</label><button class="btn good" id="saveSettings" style="width:100%">Save</button></div>
-        <div class="field span2"><label>&nbsp;</label><button class="btn primary" id="backendScanBtn" style="width:100%">Run Backend Scan</button></div>
       </div>
-      <p class="muted" style="margin:10px 0 0">Backend mode usa Render + Supabase. CoinGecko Direct mode chiama CoinGecko dal browser ed è solo fallback/test.</p>
+      <p class="muted" style="margin:10px 0 0">Frontend-only mode: CoinGecko key is optional and saved locally. Data is cached in your browser for speed.</p>
     </div>
 
     <div class="grid" style="margin-bottom:12px">
@@ -112,7 +109,7 @@
 const API_PUBLIC='https://api.coingecko.com/api/v3';
 const API_DEMO='https://api.coingecko.com/api/v3';
 const LS='xmode_cg_scanner_pro_v1';
-let state={coins:[],filtered:[],watch:new Set(),notes:{},selected:null,hist:{},watchOnly:false,settings:{apiKey:'',backendUrl:'',dataMode:'backend',pages:1,histMax:50,order:'market_cap_desc'}};
+let state={coins:[],filtered:[],watch:new Set(),notes:{},selected:null,hist:{},watchOnly:false,settings:{apiKey:'',pages:1,histMax:50,order:'market_cap_desc'}};
 const $=id=>document.getElementById(id);
 const fmtUsd=n=>{if(n==null||isNaN(n))return '—'; if(Math.abs(n)>=1e12)return '$'+(n/1e12).toFixed(2)+'T'; if(Math.abs(n)>=1e9)return '$'+(n/1e9).toFixed(2)+'B'; if(Math.abs(n)>=1e6)return '$'+(n/1e6).toFixed(2)+'M'; if(Math.abs(n)>=1e3)return '$'+(n/1e3).toFixed(2)+'K'; if(Math.abs(n)>=1)return '$'+n.toLocaleString(undefined,{maximumFractionDigits:4}); return '$'+Number(n).toPrecision(4)};
 const fmtNum=n=>n==null||isNaN(n)?'—':Number(n).toLocaleString(undefined,{maximumFractionDigits:2});
@@ -166,51 +163,6 @@ async function cg(path,retries=3){
     }
   }
 }
-
-function backendBase(){return (state.settings.backendUrl||'').trim().replace(/\/$/,'');}
-function useBackend(){return state.settings.dataMode==='backend' && backendBase();}
-function backendSort(){const order=state.settings.order||'market_cap_desc'; if(order==='volume_desc') return 'volume_mcap'; const s=$('sort')?.value; if(s==='volume') return 'volume_spike'; if(s==='marketcap') return 'market_cap'; if(s==='vmc') return 'volume_mcap'; return 'score';}
-async function backendGet(path,retries=2){
-  const base=backendBase();
-  if(!base) throw new Error('Backend URL mancante. Inserisci https://xmode-scanner-backend.onrender.com in API Settings.');
-  for(let i=0;i<retries;i++){
-    try{
-      const res=await fetch(base+path,{headers:{'accept':'application/json'}});
-      const text=await res.text();
-      let json={}; try{json=text?JSON.parse(text):{}}catch(e){json={raw:text}}
-      if(!res.ok) throw new Error(json.error||('Backend error '+res.status));
-      return json;
-    }catch(err){
-      if(i===retries-1) throw err;
-      await sleep(1500*(i+1));
-    }
-  }
-}
-function mapBackendCoin(x){
-  return {
-    id:x.id, symbol:x.symbol, name:x.name, image:x.image, market_cap_rank:x.market_cap_rank,
-    current_price:Number(x.price||0), market_cap:Number(x.market_cap||0), fully_diluted_valuation:Number(x.fully_diluted_valuation||0),
-    total_volume:Number(x.volume_24h||0), circulating_supply:Number(x.circulating_supply||0), total_supply:Number(x.total_supply||0), max_supply:Number(x.max_supply||0),
-    price_change_percentage_24h:x.change_24h==null?null:Number(x.change_24h),
-    price_change_percentage_7d_in_currency:x.change_7d==null?null:Number(x.change_7d),
-    price_change_percentage_30d_in_currency:x.change_30d==null?null:Number(x.change_30d),
-    backendScore:x.score==null?null:Number(x.score), backendVolSpike30:x.volume_spike_30d==null?null:Number(x.volume_spike_30d),
-    backendAvgVol30:x.avg_volume_30d==null?null:Number(x.avg_volume_30d), backendScannedAt:x.scanned_at
-  };
-}
-async function backendScan(){
-  const secret=prompt('Inserisci ADMIN_SECRET di Render:');
-  if(!secret)return;
-  try{
-    setStatus('Backend scan running...','warn');progress(true,15);
-    const res=await fetch(backendBase()+'/api/scan',{method:'POST',headers:{'x-admin-secret':secret,'accept':'application/json'}});
-    const json=await res.json().catch(()=>({}));
-    if(!res.ok) throw new Error(json.error||('Backend scan error '+res.status));
-    setStatus(`Backend scan complete: ${json.scanned||0} coins`,'good');progress(false);
-    await refresh(true);
-  }catch(e){progress(false);setStatus(e.message,'bad')}
-}
-
 function cacheGet(key,maxAgeMin){try{const c=JSON.parse(localStorage.getItem(key)||'null');if(!c)return null;if(Date.now()-c.t>maxAgeMin*60000)return null;return c.v}catch(e){return null}}
 function cacheSet(key,v){try{localStorage.setItem(key,JSON.stringify({t:Date.now(),v}))}catch(e){}}
 function setStatus(t,type=''){const el=$('status');el.textContent=t;el.className='pill '+type;}
@@ -265,51 +217,202 @@ function getTodayOpenTime(c){const hist=state.hist[c.id];if(hist?.todayOpenTime)
 function getCurrentVolume(c){return c.total_volume || state.hist[c.id]?.latestVol || null;}
 function renderTable(){const tb=$('tbody');if(!state.filtered.length){tb.innerHTML='<tr><td colspan="10" class="muted">No results.</td></tr>';return}tb.innerHTML=state.filtered.map(c=>{const vmc=getVmc(c);const s=calcScore(c);const sc=s>=75?'good':s>=50?'warn':'bad';const spike=state.hist[c.id]?.volSpike30;const sig=signal(c);const openVol=getTodayOpenVolume(c);const currentVol=getCurrentVolume(c);const volChg=getVolumeChangePct(c);return `<tr data-id="${c.id}"><td><div class="coin"><button class="star ${state.watch.has(c.id)?'on':''}" data-star="${c.id}">★</button><img src="${c.image}"/><div><div class="name">${c.name}</div><div class="sym">${c.symbol} · #${c.market_cap_rank||'—'}</div></div></div></td><td><span class="score ${sc}">${s}</span></td><td>${fmtUsd(c.current_price)}</td><td>${openVol?fmtUsd(openVol):'—'}</td><td>${currentVol?fmtUsd(currentVol):'—'}</td><td class="${cls(volChg)}">${volChg==null?'—':pct(volChg)}</td><td>${fmtUsd(c.market_cap)}</td><td>${vmc.toFixed(2)}%</td><td>${spike?spike.toFixed(2)+'x':'—'}</td><td><span class="tag ${sig[1]}">${sig[0]}</span></td></tr>`}).join('');tb.querySelectorAll('tr[data-id]').forEach(tr=>tr.addEventListener('click',e=>{if(e.target.dataset.star)return;selectCoin(tr.dataset.id)}));tb.querySelectorAll('[data-star]').forEach(btn=>btn.addEventListener('click',e=>{e.stopPropagation();toggleWatch(btn.dataset.star)}));}
 function toggleWatch(id){state.watch.has(id)?state.watch.delete(id):state.watch.add(id);saveLocal();applyFilters();if(state.selected?.id===id)renderDetails(state.selected)}
-async function refresh(force=false){
-  try{
-    setStatus(useBackend()?'Loading from backend...':'Loading market data...');progress(true,5);
-    if(useBackend()){
-      const cacheKey='backend_coins_'+backendSort()+'_'+($('limit')?.value||500);
-      const cached=force?null:cacheGet(cacheKey,2);
-      if(cached){state.coins=cached.map(mapBackendCoin);setStatus('Loaded backend cache','good');progress(false);applyFilters();return}
-      const json=await backendGet(`/api/coins?limit=1000&sort=${backendSort()}`);
-      state.coins=(json.data||[]).map(mapBackendCoin);
-      cacheSet(cacheKey,json.data||[]);
-      $('kUpdated').textContent=new Date().toLocaleString();
-      setStatus('Loaded from Render backend','good');progress(false);applyFilters();return;
-    }
-    const order=state.settings.order||'market_cap_desc';const cacheKey='cg_markets_'+order+'_pages_'+state.settings.pages;const cached=force?null:cacheGet(cacheKey,8);if(cached){state.coins=cached;setStatus(order==='volume_desc'?'Loaded top volume from cache':'Loaded from cache','good');progress(false);applyFilters();return}let out=[];for(let p=1;p<=state.settings.pages;p++){progress(true,Math.round((p-1)/state.settings.pages*90)+5);const path=`/coins/markets?vs_currency=usd&order=${order}&per_page=250&page=${p}&sparkline=false&price_change_percentage=1h,24h,7d,14d,30d,1y&locale=en`;
-      const data=await cg(path);out=out.concat(data);await sleep(1200)}state.coins=out;cacheSet(cacheKey,out);$('kUpdated').textContent=new Date().toLocaleString();setStatus(order==='volume_desc'?'Market data updated by 24h volume':'Market data updated','good');progress(false);applyFilters()}catch(e){progress(false);setStatus(e.message,'bad');}}
+async function refresh(force=false){try{setStatus('Loading market data...');progress(true,5);const order=state.settings.order||'market_cap_desc';const cacheKey='cg_markets_'+order+'_pages_'+state.settings.pages;const cached=force?null:cacheGet(cacheKey,8);if(cached){state.coins=cached;setStatus(order==='volume_desc'?'Loaded top volume from cache':'Loaded from cache','good');progress(false);applyFilters();return}let out=[];for(let p=1;p<=state.settings.pages;p++){progress(true,Math.round((p-1)/state.settings.pages*90)+5);const path=`/coins/markets?vs_currency=usd&order=${order}&per_page=250&page=${p}&sparkline=false&price_change_percentage=1h,24h,7d,14d,30d,1y&locale=en`;
+      const data=await cg(path);out=out.concat(data);await sleep(1200)}state.coins=out;cacheSet(cacheKey,out);$('kUpdated').textContent=new Date().toLocaleString();setStatus(order==='volume_desc'?'Top 24h volume data updated':'Market cap data updated','good');progress(false);applyFilters()}catch(e){progress(false);setStatus(e.message,'bad');}}
 function selectCoin(id){const c=state.coins.find(x=>x.id===id);if(!c)return;state.selected=c;renderDetails(c);generateResearch(c);renderHistoricalBox(c);$('notes').value=state.notes[c.id]||'';}
 function renderDetails(c){const vmc=getVmc(c);const hist=state.hist[c.id];const sig=signal(c);const openVol=getTodayOpenVolume(c);const openTime=getTodayOpenTime(c);const currentVol=getCurrentVolume(c);const volChg=getVolumeChangePct(c);$('details').innerHTML=`<div class="coin" style="margin-bottom:12px"><img src="${c.image}" style="width:34px;height:34px"/><div><div class="name" style="font-size:18px">${c.name} <span class="sym">${c.symbol}</span></div><div class="muted">Rank #${c.market_cap_rank||'—'} · ${sig[0]}</div></div></div><div class="grid"><div class="span6"><span class="muted">Price</span><br><b>${fmtUsd(c.current_price)}</b></div><div class="span6"><span class="muted">Score</span><br><b>${calcScore(c)}/100</b></div><div class="span6"><span class="muted">Today Open Vol</span><br><b>${openVol?fmtUsd(openVol):'—'}</b><br><span class="muted">${openTime?fmtDate(openTime):''}</span></div><div class="span6"><span class="muted">Current Vol</span><br><b>${fmtUsd(currentVol)}</b></div><div class="span6"><span class="muted">Volume Change</span><br><b class="${cls(volChg)}">${volChg==null?'—':pct(volChg)}</b></div><div class="span6"><span class="muted">Vol/MCap</span><br><b>${vmc.toFixed(2)}%</b></div><div class="span6"><span class="muted">Market Cap</span><br><b>${fmtUsd(c.market_cap)}</b></div><div class="span6"><span class="muted">FDV</span><br><b>${fmtUsd(c.fully_diluted_valuation)}</b></div></div><div class="notice" style="margin-top:12px">${hist?`30D avg volume: ${fmtUsd(hist.avgVol30)} · Avg market cap: ${fmtUsd(hist.avgMcap30)} · 30D Spike: ${hist.volSpike30?hist.volSpike30.toFixed(2)+'x':'—'}`:'Run 30D Volume Scan or click Load Historical to calculate real volume spike.'}</div>${hist?`<div class="histSummary"><div class="histStat"><span class="muted">Latest hist volume</span><div class="v">${fmtUsd(hist.latestVol)}</div></div><div class="histStat"><span class="muted">Latest hist mcap</span><div class="v">${fmtUsd(hist.latestMcap)}</div></div><div class="histStat"><span class="muted">30D avg volume</span><div class="v">${fmtUsd(hist.avgVol30)}</div></div><div class="histStat"><span class="muted">30D avg mcap</span><div class="v">${fmtUsd(hist.avgMcap30)}</div></div></div>`:''}<div style="margin-top:10px" class="smallrow"><button class="btn good" onclick="loadHistoricalSelected()">Load Historical</button><button class="btn" onclick="openCG('${c.id}')">Open CoinGecko</button><button class="btn ${state.watch.has(c.id)?'danger':''}" onclick="toggleWatch('${c.id}')">${state.watch.has(c.id)?'Remove Watch':'Add Watch'}</button></div><div id="chart" class="chartGrid"></div>`; if(hist)drawHistoricalCharts(hist,'chart');}
 window.openCG=id=>window.open('https://www.coingecko.com/en/coins/'+id,'_blank');
 function makeLineSvg(points,label){if(!points?.length)return '<span class="muted">No chart data.</span>';const w=640,h=150,pad=18;const vals=points.map(x=>x[1]).filter(v=>v!=null&&isFinite(v));const min=Math.min(...vals),max=Math.max(...vals);const step=(w-pad*2)/Math.max(1,points.length-1);const y=v=>h-pad-((v-min)/(max-min||1))*(h-pad*2);const d=points.map((pt,i)=>(i?'L':'M')+(pad+i*step).toFixed(1)+' '+y(pt[1]).toFixed(1)).join(' ');return `<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="currentColor" stroke-width="2"/><text x="18" y="22" fill="currentColor" opacity=".7" font-size="13">${label}</text><text x="18" y="142" fill="currentColor" opacity=".45" font-size="11">Min ${fmtUsd(min)} · Max ${fmtUsd(max)}</text></svg>`;}
 function drawHistoricalCharts(hist,id){const box=$(id);if(!box)return;box.innerHTML=`<div class="miniChart">${makeLineSvg(hist.volumes||[],'30D Volume')}</div><div class="miniChart">${makeLineSvg(hist.marketCaps||[],'30D Market Cap')}</div>`;}
 function renderHistoricalBox(c){const box=$('historyContent');if(!box)return;if(!c){box.innerHTML='Select a coin, then click Load Historical.';return}const hist=state.hist[c.id];if(!hist){box.innerHTML=`<div class="notice">Historical data not loaded for ${c.name}. Click <b>Load Historical</b> in Coin Details or run <b>Run 30D Volume Scan</b>.</div>`;return}const prices=hist.prices||[],volumes=hist.volumes||[],mcaps=hist.marketCaps||[];const rows=[];for(let i=prices.length-1;i>=0;i--){const t=prices[i]?.[0];const price=prices[i]?.[1];const vol=(volumes.find(v=>v[0]===t)||volumes[i]||[])[1];const mcap=(mcaps.find(v=>v[0]===t)||mcaps[i]||[])[1];const vmc=mcap?vol/mcap*100:null;rows.push(`<tr><td>${fmtDate(t)}</td><td>${fmtUsd(price)}</td><td>${fmtUsd(vol)}</td><td>${fmtUsd(mcap)}</td><td>${vmc?vmc.toFixed(2)+'%':'—'}</td></tr>`)}const volChg=getVolumeChangePct(c);box.innerHTML=`<div class="histSummary" style="margin-bottom:12px"><div class="histStat"><span class="muted">Today Open Volume</span><div class="v">${fmtUsd(getTodayOpenVolume(c))}</div></div><div class="histStat"><span class="muted">Current Volume</span><div class="v">${fmtUsd(getCurrentVolume(c))}</div></div><div class="histStat"><span class="muted">Volume Change</span><div class="v ${cls(volChg)}">${volChg==null?'—':pct(volChg)}</div></div><div class="histStat"><span class="muted">30D Volume Spike</span><div class="v">${hist.volSpike30?hist.volSpike30.toFixed(2)+'x':'—'}</div></div></div><div id="historyCharts" class="chartGrid" style="margin-bottom:12px"></div><div class="histTableWrap"><table class="histTbl"><thead><tr><th>Data/Ora</th><th>Price</th><th>Volume</th><th>Market Cap</th><th>Vol/MCap</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`;drawHistoricalCharts(hist,'historyCharts');}
-async function loadHistorical(id){
-  const cache='hist_'+id+'_'+(useBackend()?'backend':'direct');
-  const cached=cacheGet(cache,60*12);
-  if(cached&&cached.volumes&&cached.marketCaps&&cached.todayOpenVol!==undefined){state.hist[id]=cached;saveLocal();return cached}
-  if(useBackend()){
-    const json=await backendGet(`/api/coin/${id}/history`);
-    const rows=(json.data||[]).slice().reverse();
-    const prices=rows.map(r=>[new Date(r.scanned_at).getTime(), Number(r.price||0)]);
-    const volumes=rows.map(r=>[new Date(r.scanned_at).getTime(), Number(r.volume_24h||0)]);
-    const marketCaps=rows.map(r=>[new Date(r.scanned_at).getTime(), Number(r.market_cap||0)]);
-    const vols=volumes.map(x=>x[1]).filter(Boolean); const mcaps=marketCaps.map(x=>x[1]).filter(Boolean);
-    const avg=avgArr(vols)||0, avgMcap=avgArr(mcaps)||0, latest=vols.at(-1)||0, latestMcap=mcaps.at(-1)||0;
-    const latestTs=volumes.at(-1)?.[0]||Date.now(); const todayRows=volumes.filter(v=>sameLocalDay(v[0],latestTs)); const todayOpen=todayRows[0]||volumes[0]||[];
-    const result={avgVol30:avg,avgMcap30:avgMcap,latestVol:latest,latestMcap:latestMcap,todayOpenVol:todayOpen[1]||null,todayOpenTime:todayOpen[0]||null,volSpike30:avg?latest/avg:null,prices,volumes,marketCaps,ts:Date.now()};
-    cacheSet(cache,result);state.hist[id]=result;saveLocal();return result;
-  }
-  const data=await cg(`/coins/${id}/market_chart?vs_currency=usd&days=30&interval=daily`);const volumes=data.total_volumes||[];const marketCaps=data.market_caps||[];const vols=volumes.map(x=>x[1]).filter(Boolean);const mcaps=marketCaps.map(x=>x[1]).filter(Boolean);const avg=avgArr(vols)||0;const avgMcap=avgArr(mcaps)||0;const latest=vols.at(-1)||0;const latestMcap=mcaps.at(-1)||0;const latestTs=volumes.at(-1)?.[0]||Date.now();const todayRows=volumes.filter(v=>sameLocalDay(v[0],latestTs));const todayOpen=todayRows[0]||volumes[0]||[];const result={avgVol30:avg,avgMcap30:avgMcap,latestVol:latest,latestMcap:latestMcap,todayOpenVol:todayOpen[1]||null,todayOpenTime:todayOpen[0]||null,volSpike30:avg?latest/avg:null,prices:data.prices||[],volumes,marketCaps,ts:Date.now()};cacheSet(cache,result);state.hist[id]=result;saveLocal();return result;}
+async function loadHistorical(id){const cache='hist_'+id;const cached=cacheGet(cache,60*12);if(cached&&cached.volumes&&cached.marketCaps&&cached.todayOpenVol!==undefined){state.hist[id]=cached;saveLocal();return cached}const data=await cg(`/coins/${id}/market_chart?vs_currency=usd&days=30&interval=daily`);const volumes=data.total_volumes||[];const marketCaps=data.market_caps||[];const vols=volumes.map(x=>x[1]).filter(Boolean);const mcaps=marketCaps.map(x=>x[1]).filter(Boolean);const avg=avgArr(vols)||0;const avgMcap=avgArr(mcaps)||0;const latest=vols.at(-1)||0;const latestMcap=mcaps.at(-1)||0;const latestTs=volumes.at(-1)?.[0]||Date.now();const todayRows=volumes.filter(v=>sameLocalDay(v[0],latestTs));const todayOpen=todayRows[0]||volumes[0]||[];const result={avgVol30:avg,avgMcap30:avgMcap,latestVol:latest,latestMcap:latestMcap,todayOpenVol:todayOpen[1]||null,todayOpenTime:todayOpen[0]||null,volSpike30:avg?latest/avg:null,prices:data.prices||[],volumes,marketCaps,ts:Date.now()};cacheSet(cache,result);state.hist[id]=result;saveLocal();return result;}
 window.loadHistoricalSelected=async()=>{if(!state.selected)return;try{setStatus('Loading historical data...');await loadHistorical(state.selected.id);setStatus('Historical loaded','good');renderDetails(state.selected);generateResearch(state.selected);renderHistoricalBox(state.selected);applyFilters()}catch(e){setStatus(e.message,'bad')}};
 async function runHistScan(){const base=[...state.filtered].slice(0,+state.settings.histMax);if(!base.length)return;try{progress(true,0);setStatus('Running 30D volume scan...');for(let i=0;i<base.length;i++){await loadHistorical(base[i].id);progress(true,Math.round((i+1)/base.length*100));setStatus(`Historical scan ${i+1}/${base.length}`);await sleep(1500)}progress(false);setStatus('30D volume scan complete','good');applyFilters();if(state.selected)renderDetails(state.selected),generateResearch(state.selected),renderHistoricalBox(state.selected)}catch(e){progress(false);setStatus(e.message,'bad')}}
 function targetPrice(c,mc){const supply=c.circulating_supply||0;return supply?mc/supply:null}function targetFDV(c,mc){const supply=c.total_supply||c.max_supply||0;return supply?mc/supply:null}
 function generateResearch(c){const targets=[1e8,5e8,1e9,2e9,1e10,2e10,5e10,1e11];const vmc=(c.total_volume||0)/(c.market_cap||1)*100;const hist=state.hist[c.id];const lines=[];lines.push(`🧠 ${c.name} (${c.symbol.toUpperCase()}) xMode Research`);lines.push('');lines.push(`Current`);lines.push(`Price ${fmtUsd(c.current_price)} | MCap ${fmtUsd(c.market_cap)} | FDV ${fmtUsd(c.fully_diluted_valuation)} | 24h Vol ${fmtUsd(c.total_volume)} | Vol/MCap ${vmc.toFixed(2)}% | Score ${calcScore(c)}/100`);if(hist)lines.push(`Historical 30D Avg Vol ${fmtUsd(hist.avgVol30)} | Latest Hist Vol ${fmtUsd(hist.latestVol)} | Avg MCap ${fmtUsd(hist.avgMcap30)} | Latest MCap ${fmtUsd(hist.latestMcap)} | Vol Spike ${hist.volSpike30?hist.volSpike30.toFixed(2)+'x':'—'}`);lines.push('');lines.push('Targets Circulating');lines.push(targets.map(t=>`${fmtUsd(t)} → ${fmtUsd(targetPrice(c,t))}`).join(' | '));lines.push('');lines.push('Targets FDV / Total Supply');lines.push(targets.map(t=>`${fmtUsd(t)} → ${fmtUsd(targetFDV(c,t))}`).join(' | '));lines.push('');lines.push('Volume');lines.push(hist?`30D avg ${fmtUsd(hist.avgVol30)} | Latest ${fmtUsd(hist.latestVol)} | Spike ${hist.volSpike30?hist.volSpike30.toFixed(2)+'x':'—'}`:`24h volume ${fmtUsd(c.total_volume)} | Run historical scan for real 30D volume spike.`);lines.push('');lines.push('Risks');lines.push(`Check unlocks, liquidity depth, token utility, social activity, FDV dilution and whether volume is organic or CEX-driven.`);lines.push('');const sig=signal(c)[0];lines.push('Verdict');lines.push(`${sig}. ${calcScore(c)>=75?'Good candidate for deeper research, not automatic entry.':calcScore(c)>=55?'Interesting but needs confirmation from chart, community and liquidity.':'Weak/neutral based on current scanner metrics.'}`);lines.push('');lines.push('*Not Financial Advice — Always DYOR.*');$('research').value=lines.join('\n');}
 function exportCsv(){const rows=[['id','symbol','name','rank','price','market_cap','fdv','today_open_volume','current_volume','volume_change_pct','volume_mcap_pct','score','vol_spike_30d']];state.filtered.forEach(c=>rows.push([c.id,c.symbol,c.name,c.market_cap_rank,c.current_price,c.market_cap,c.fully_diluted_valuation,getTodayOpenVolume(c)||'',getCurrentVolume(c)||'',getVolumeChangePct(c)??'',getVmc(c).toFixed(2),calcScore(c),state.hist[c.id]?.volSpike30||'']));const csv=rows.map(r=>r.map(x=>'"'+String(x??'').replaceAll('"','""')+'"').join(',')).join('\n');const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));a.download='xmode-cg-scanner.csv';a.click();}
-function wire(){loadLocal();$('apiKey').value=state.settings.apiKey;$('backendUrl').value=state.settings.backendUrl||'https://xmode-scanner-backend.onrender.com';$('dataMode').value=state.settings.dataMode||'backend';$('pages').value=state.settings.pages;$('loadOrder').value=state.settings.order||'market_cap_desc';$('histMax').value=state.settings.histMax;$('settingsBtn').onclick=()=>$('settings').classList.toggle('hide');$('saveSettings').onclick=()=>{state.settings.apiKey=$('apiKey').value.trim();state.settings.backendUrl=$('backendUrl').value.trim();state.settings.dataMode=$('dataMode').value;state.settings.pages=+$('pages').value;state.settings.order=$('loadOrder').value;state.settings.histMax=+$('histMax').value;saveLocal();setStatus('Settings saved','good');refresh(true)};$('backendScanBtn').onclick=backendScan;$('refreshBtn').onclick=()=>refresh(true);$('histScanBtn').onclick=runHistScan;$('exportBtn').onclick=exportCsv;$('clearCacheBtn').onclick=()=>{Object.keys(localStorage).filter(k=>k.startsWith('cg_')||k.startsWith('hist_')||k.startsWith('backend_')).forEach(k=>localStorage.removeItem(k));setStatus('Cache cleared','good')};$('watchBtn').onclick=()=>{state.watchOnly=!state.watchOnly;$('watchBtn').classList.toggle('good',state.watchOnly);applyFilters()};$('topVolumeBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('sort').value='volume';$('minVol').value='0';$('minVolChange').value='0';saveLocal();refresh(true);setStatus(useBackend()?'Loading backend top volume...':'Loading coins ordered by highest 24h volume...','good')};$('earlyGemsBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('cap').value='all';$('minMcap').value='0';$('maxMcap').value='150000000';$('minVol').value='500000';$('minVmc').value='8';$('minScore').value='70';$('minVolChange').value='50';$('sort').value='score';saveLocal();refresh(true);setStatus('Early Gems preset loaded','good')};$('accelBtn').onclick=()=>{$('minVolChange').value='100';$('minVmc').value='10';$('minScore').value='60';$('sort').value='volchange';applyFilters();setStatus('Volume Acceleration filter applied','good')};$('lowCapHighVolBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('cap').value='all';$('minMcap').value='0';$('maxMcap').value='100000000';$('minVol').value='1000000';$('minVmc').value='5';$('minVolChange').value='0';$('sort').value='volume';saveLocal();refresh(true);setStatus('Loading low cap + high volume candidates...','good')};['q','cap','minMcap','maxMcap','minVmc','minVol','minScore','minVolChange','chg','sort','limit'].forEach(id=>$(id).addEventListener('input',applyFilters));$('copyResearch').onclick=async()=>{await navigator.clipboard.writeText($('research').value);setStatus('Research copied','good')};$('saveNote').onclick=()=>{if(!state.selected)return;state.notes[state.selected.id]=$('notes').value;saveLocal();$('noteStatus').textContent='Saved'};document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');$('researchBox').classList.toggle('hide',t.dataset.tab!=='research');$('historyBox').classList.toggle('hide',t.dataset.tab!=='history');$('notesBox').classList.toggle('hide',t.dataset.tab!=='notes')});renderKpis();refresh();}
+function wire(){loadLocal();$('apiKey').value=state.settings.apiKey;$('pages').value=state.settings.pages;$('loadOrder').value=state.settings.order||'market_cap_desc';$('histMax').value=state.settings.histMax;$('settingsBtn').onclick=()=>$('settings').classList.toggle('hide');$('saveSettings').onclick=()=>{state.settings.apiKey=$('apiKey').value.trim();state.settings.pages=+$('pages').value;state.settings.order=$('loadOrder').value;state.settings.histMax=+$('histMax').value;saveLocal();setStatus('Settings saved','good')};$('refreshBtn').onclick=()=>refresh(true);$('histScanBtn').onclick=runHistScan;$('exportBtn').onclick=exportCsv;$('clearCacheBtn').onclick=()=>{Object.keys(localStorage).filter(k=>k.startsWith('cg_')||k.startsWith('hist_')).forEach(k=>localStorage.removeItem(k));setStatus('Cache cleared','good')};$('watchBtn').onclick=()=>{state.watchOnly=!state.watchOnly;$('watchBtn').classList.toggle('good',state.watchOnly);applyFilters()};$('topVolumeBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('sort').value='volume';$('minVol').value='0';$('minVolChange').value='0';saveLocal();refresh(true);setStatus('Loading coins ordered by highest 24h volume...','good')};$('earlyGemsBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('cap').value='all';$('minMcap').value='0';$('maxMcap').value='150000000';$('minVol').value='500000';$('minVmc').value='8';$('minScore').value='70';$('minVolChange').value='50';$('sort').value='score';saveLocal();refresh(true);setStatus('Early Gems preset loaded','good')};$('accelBtn').onclick=()=>{$('minVolChange').value='100';$('minVmc').value='10';$('minScore').value='60';$('sort').value='volchange';applyFilters();setStatus('Volume Acceleration filter applied','good')};$('lowCapHighVolBtn').onclick=()=>{state.settings.order='volume_desc';$('loadOrder').value='volume_desc';$('cap').value='all';$('minMcap').value='0';$('maxMcap').value='100000000';$('minVol').value='1000000';$('minVmc').value='5';$('minVolChange').value='0';$('sort').value='volume';saveLocal();refresh(true);setStatus('Loading low cap + high volume candidates...','good')};['q','cap','minMcap','maxMcap','minVmc','minVol','minScore','minVolChange','chg','sort','limit'].forEach(id=>$(id).addEventListener('input',applyFilters));$('copyResearch').onclick=async()=>{await navigator.clipboard.writeText($('research').value);setStatus('Research copied','good')};$('saveNote').onclick=()=>{if(!state.selected)return;state.notes[state.selected.id]=$('notes').value;saveLocal();$('noteStatus').textContent='Saved'};document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));t.classList.add('active');$('researchBox').classList.toggle('hide',t.dataset.tab!=='research');$('historyBox').classList.toggle('hide',t.dataset.tab!=='history');$('notesBox').classList.toggle('hide',t.dataset.tab!=='notes')});renderKpis();refresh();}
 wire();
+
+/* ==========================================================
+   xMode Frontend-Only Coin Details Upgrade
+   - No backend required
+   - Restores 24h / 7d / 30d in Coin Details
+   - Keeps clean scanner table
+   - Adds intraday volume metrics where historical data exists
+   ========================================================== */
+
+function xmodeFmtChangePill(label, val){
+  return `<span class="pill ${cls(val)}">${label} ${pct(val)}</span>`;
+}
+
+function xmodeVolumeChange(openVol, currentVol){
+  if(!openVol || !currentVol) return null;
+  return ((currentVol - openVol) / openVol) * 100;
+}
+
+function xmodeGetTodayOpenVolume(hist){
+  if(!hist?.rows?.length) return null;
+  // rows may be newest -> oldest or oldest -> newest depending file version.
+  const rows = [...hist.rows].filter(r => r.volume);
+  if(!rows.length) return null;
+
+  const newestDate = rows[0].date?.split(" ").slice(0,2).join(" ");
+  const todayRows = rows.filter(r => (r.date || "").startsWith(newestDate));
+  const chronological = [...todayRows].reverse();
+  return chronological[0]?.volume || null;
+}
+
+function xmodeCurrentVolume(c, hist){
+  return c.total_volume || hist?.latestVol || hist?.rows?.[0]?.volume || null;
+}
+
+function xmodeDrawDualCharts(hist){
+  if(!hist?.rows?.length) return "";
+  return `
+    <div style="margin-top:12px;display:grid;grid-template-columns:1fr;gap:10px">
+      <div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">30D Volume Chart</div>
+        <div id="volumeChart" class="chart"></div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:12px;margin-bottom:6px">30D Market Cap Chart</div>
+        <div id="mcapChart" class="chart"></div>
+      </div>
+    </div>
+  `;
+}
+
+function xmodeDrawSimpleChartFromRows(rows, key, id, label){
+  const el = $(id);
+  if(!el || !rows?.length){return;}
+  const points = [...rows].reverse().filter(r => r[key]).map((r,i)=>[i, Number(r[key])]);
+  if(points.length < 2){el.innerHTML='<span class="muted">No chart data.</span>';return;}
+  const w=320,h=210,pad=16;
+  const vals=points.map(x=>x[1]);
+  const min=Math.min(...vals), max=Math.max(...vals);
+  const step=(w-pad*2)/(points.length-1);
+  const y=v=>h-pad-((v-min)/(max-min||1))*(h-pad*2);
+  const d=points.map((pt,i)=>(i?'L':'M')+(pad+i*step).toFixed(1)+' '+y(pt[1]).toFixed(1)).join(' ');
+  el.innerHTML=`<svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}" fill="none" stroke="currentColor" stroke-width="2"/><text x="16" y="22" fill="currentColor" opacity=".65" font-size="12">${label}</text></svg>`;
+}
+
+const _xmodeOldRenderDetails = typeof renderDetails === "function" ? renderDetails : null;
+renderDetails = function(c){
+  const vmc=(c.total_volume||0)/(c.market_cap||1)*100;
+  const hist=state.hist[c.id];
+  const sig=signal(c);
+  const todayOpenVol = xmodeGetTodayOpenVolume(hist);
+  const currentVol = xmodeCurrentVolume(c, hist);
+  const volChange = xmodeVolumeChange(todayOpenVol, currentVol);
+  const avgVol30 = hist?.avgVol30 || null;
+  const spike = hist?.volSpike30 || null;
+  const latestMcap = hist?.rows?.[0]?.marketCap || c.market_cap || null;
+  const avgMcap30 = hist?.rows?.length ? hist.rows.reduce((a,r)=>a+(Number(r.marketCap)||0),0)/hist.rows.filter(r=>r.marketCap).length : null;
+
+  $('details').innerHTML=`
+    <div class="coin" style="margin-bottom:12px">
+      <img src="${c.image}" style="width:36px;height:36px"/>
+      <div>
+        <div class="name" style="font-size:18px">${c.name} <span class="sym">${c.symbol}</span></div>
+        <div class="muted">Rank #${c.market_cap_rank||'—'} · ${sig[0]}</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="span6"><span class="muted">Price</span><br><b>${fmtUsd(c.current_price)}</b></div>
+      <div class="span6"><span class="muted">Score</span><br><b>${calcScore(c)}/100</b></div>
+
+      <div class="span6"><span class="muted">Market Cap</span><br><b>${fmtUsd(c.market_cap)}</b></div>
+      <div class="span6"><span class="muted">FDV</span><br><b>${fmtUsd(c.fully_diluted_valuation)}</b></div>
+
+      <div class="span6"><span class="muted">24h Volume</span><br><b>${fmtUsd(c.total_volume)}</b></div>
+      <div class="span6"><span class="muted">Vol/MCap</span><br><b>${vmc.toFixed(2)}%</b></div>
+    </div>
+
+    <div style="margin:12px 0" class="smallrow">
+      ${xmodeFmtChangePill('24h', c.price_change_percentage_24h)}
+      ${xmodeFmtChangePill('7d', c.price_change_percentage_7d_in_currency)}
+      ${xmodeFmtChangePill('30d', c.price_change_percentage_30d_in_currency)}
+    </div>
+
+    <div class="notice">
+      ${hist
+        ? `30D avg volume: ${fmtUsd(avgVol30)} · 30D spike: ${spike ? spike.toFixed(2)+'x' : '—'}`
+        : 'Run 30D Volume Scan or click Load Historical to calculate real volume spike.'}
+    </div>
+
+    <div class="grid" style="margin-top:12px">
+      <div class="span6 card pad" style="box-shadow:none;background:var(--panel2)">
+        <span class="muted">Today Open Volume</span><br><b>${fmtUsd(todayOpenVol)}</b>
+      </div>
+      <div class="span6 card pad" style="box-shadow:none;background:var(--panel2)">
+        <span class="muted">Current Volume</span><br><b>${fmtUsd(currentVol)}</b>
+      </div>
+      <div class="span6 card pad" style="box-shadow:none;background:var(--panel2)">
+        <span class="muted">Volume Change %</span><br><b class="${cls(volChange)}">${volChange==null?'—':pct(volChange)}</b>
+      </div>
+      <div class="span6 card pad" style="box-shadow:none;background:var(--panel2)">
+        <span class="muted">30D Avg MCap</span><br><b>${fmtUsd(avgMcap30)}</b>
+      </div>
+    </div>
+
+    <div style="margin-top:10px" class="smallrow">
+      <button class="btn good" onclick="loadHistoricalSelected()">Load Historical</button>
+      <button class="btn" onclick="openCG('${c.id}')">Open CoinGecko</button>
+      <button class="btn ${state.watch.has(c.id)?'danger':''}" onclick="toggleWatch('${c.id}')">${state.watch.has(c.id)?'Remove Watch':'Add Watch'}</button>
+    </div>
+
+    ${xmodeDrawDualCharts(hist)}
+  `;
+
+  if(hist?.rows?.length){
+    xmodeDrawSimpleChartFromRows(hist.rows, 'volume', 'volumeChart', '30D Volume');
+    xmodeDrawSimpleChartFromRows(hist.rows, 'marketCap', 'mcapChart', '30D Market Cap');
+  } else if(hist?.prices) {
+    // fallback older chart
+    $('details').insertAdjacentHTML('beforeend', '<div id="chart" class="chart" style="margin-top:12px"></div>');
+    drawChart(hist.prices,'chart');
+  }
+};
+
+const _xmodeOldGenerateResearch = typeof generateResearch === "function" ? generateResearch : null;
+generateResearch = function(c){
+  const targets=[1e8,5e8,1e9,2e9,1e10,2e10,5e10,1e11];
+  const vmc=(c.total_volume||0)/(c.market_cap||1)*100;
+  const hist=state.hist[c.id];
+  const todayOpenVol = xmodeGetTodayOpenVolume(hist);
+  const currentVol = xmodeCurrentVolume(c, hist);
+  const volChange = xmodeVolumeChange(todayOpenVol, currentVol);
+  const lines=[];
+  lines.push(`🧠 ${c.name} (${c.symbol.toUpperCase()}) xMode Research`);
+  lines.push('');
+  lines.push(`Current`);
+  lines.push(`Price ${fmtUsd(c.current_price)} | MCap ${fmtUsd(c.market_cap)} | FDV ${fmtUsd(c.fully_diluted_valuation)} | 24h Vol ${fmtUsd(c.total_volume)} | Vol/MCap ${vmc.toFixed(2)}% | Score ${calcScore(c)}/100`);
+  lines.push(`24h ${pct(c.price_change_percentage_24h)} | 7d ${pct(c.price_change_percentage_7d_in_currency)} | 30d ${pct(c.price_change_percentage_30d_in_currency)}`);
+  lines.push('');
+  lines.push('Volume');
+  lines.push(hist
+    ? `Today Open Vol ${fmtUsd(todayOpenVol)} | Current Vol ${fmtUsd(currentVol)} | Intraday Change ${volChange==null?'—':pct(volChange)} | 30D Avg ${fmtUsd(hist.avgVol30)} | 30D Spike ${hist.volSpike30?hist.volSpike30.toFixed(2)+'x':'—'}`
+    : `24h volume ${fmtUsd(c.total_volume)} | Run historical scan for intraday and 30D volume metrics.`);
+  lines.push('');
+  lines.push('Targets Circulating');
+  lines.push(targets.map(t=>`${fmtUsd(t)} → ${fmtUsd(targetPrice(c,t))}`).join(' | '));
+  lines.push('');
+  lines.push('Targets FDV / Total Supply');
+  lines.push(targets.map(t=>`${fmtUsd(t)} → ${fmtUsd(targetFDV(c,t))}`).join(' | '));
+  lines.push('');
+  lines.push('Risks');
+  lines.push(`Check unlocks, liquidity depth, token utility, social activity, FDV dilution and whether volume is organic or CEX-driven.`);
+  lines.push('');
+  const sig=signal(c)[0];
+  lines.push('Verdict');
+  lines.push(`${sig}. ${calcScore(c)>=75?'Good candidate for deeper research, not automatic entry.':calcScore(c)>=55?'Interesting but needs confirmation from chart, community and liquidity.':'Weak/neutral based on current scanner metrics.'}`);
+  lines.push('');
+  lines.push('*Not Financial Advice — Always DYOR.*');
+  $('research').value=lines.join('\n');
+};
+
 </script>
 </body>
 </html>
